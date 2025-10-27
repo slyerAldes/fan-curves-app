@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Fan Curves via XML Upload & Edition</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        img {
+            max-width: 400px;
+            margin: 10px 0;
+        }
+
+        .fan-label {
+            font-weight: bold;
+            margin-top: 20px;
+        }
+
+        fieldset {
+            margin-bottom: 15px;
+        }
+
+        .dl-btn {
+            margin: 10px 5px 10px 0;
+            padding: 6px 12px;
+            font-size: 1em;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Importe un fichier XML, modifie les valeurs et affiche les courbes</h2>
+    <input type="file" id="xmlFile" accept=".xml">
+    <div id="fanForm"></div>
+    <button onclick="processFans()">Calculer les Courbes</button>
+    <pre id="result"></pre>
+    <div id="fanArea1"></div>
+    <div id="fanArea2"></div>
+
+    <script>
+        let fans = [];
+        let base64Imgs = [];
+
+        // Affiche le formulaire d’édition après sélection du fichier XML
+        function displayFormFromXML(xmlContent) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(xmlContent, "text/xml");
+            const elevation = doc.querySelector("Elevation")?.textContent || "0";
+
+            const airFrais = doc.querySelector("Ventilateurs > AirFrais");
+            const fanFrais = {
+                label: "AirFrais",
+                model: airFrais?.querySelector("Model")?.textContent || "",
+                cfm: airFrais?.querySelector("CFM")?.textContent || "",
+                sp: airFrais?.querySelector("SP")?.textContent || "",
+                temp: airFrais?.querySelector("Temp")?.textContent || "",
+                altitude: elevation
+            };
+
+            const airVicie = doc.querySelector("Ventilateurs > AirVicie");
+            const fanVicie = {
+                label: "AirVicie",
+                model: airVicie?.querySelector("Model")?.textContent || "",
+                cfm: airVicie?.querySelector("CFM")?.textContent || "",
+                sp: airVicie?.querySelector("SP")?.textContent || "",
+                temp: airVicie?.querySelector("Temp")?.textContent || "",
+                altitude: elevation
+            };
+
+            fans = [fanFrais, fanVicie];
+
+            // Génère le formulaire dynamique
+            let formHTML = '';
+            fans.forEach((fan, idx) => {
+                formHTML += `<fieldset>
+      <legend>${fan.label}</legend>
+      Modèle: <input id="model${idx}" value="${fan.model}"><br>
+      CFM: <input id="cfm${idx}" value="${fan.cfm}"><br>
+      SP: <input id="sp${idx}" value="${fan.sp}"><br>
+      Temp: <input id="temp${idx}" value="${fan.temp}"><br>
+      Altitude: <input id="altitude${idx}" value="${fan.altitude}"><br>
+    </fieldset>`;
+            });
+            document.getElementById('fanForm').innerHTML = formHTML;
+        }
+
+        document.getElementById('xmlFile').addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function (evt) {
+                displayFormFromXML(evt.target.result);
+                document.getElementById('result').textContent = "Fichier chargé et formulaire prêt.";
+                // On vide l’affichage des derniers résultats précédents
+                document.getElementById('fanArea1').innerHTML = '';
+                document.getElementById('fanArea2').innerHTML = '';
+            };
+            reader.readAsText(file);
+        });
+
+        async function processFans() {
+            base64Imgs.length = 0;
+            document.getElementById('result').textContent = "Calcul en cours...";
+            for (let i = 0; i < fans.length; i++) {
+                const model = document.getElementById(`model${i}`).value;
+                const cfm = document.getElementById(`cfm${i}`).value;
+                const sp = document.getElementById(`sp${i}`).value;
+                const temp = document.getElementById(`temp${i}`).value;
+                const altitude = document.getElementById(`altitude${i}`).value;
+
+                let soapBody = `
+      <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+        xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+        <soap:Body>
+          <CalcFanWithJPGCurves xmlns="http://tempuri.org/">
+            <strModel>${model}</strModel>
+            <sSP>${sp}</sSP>
+            <sCFM>${cfm}</sCFM>
+            <sTemperature>${temp}</sTemperature>
+            <sAltitude>${altitude}</sAltitude>
+          </CalcFanWithJPGCurves>
+        </soap:Body>
+      </soap:Envelope>`;
+
+                try {
+                    const response = await fetch("http://localhost:3005/soapproxy", {
+                        method: "POST",
+                        headers: { "Content-Type": "text/xml; charset=utf-8" },
+                        body: soapBody
+                    });
+                    const xmlSoap = await response.text();
+                    const match = xmlSoap.match(/<FanCurveLargeJPG>([\s\S]*?)<\/FanCurveLargeJPG>/);
+                    if (match && match[1].length > 10) {
+                        const cleanBase64 = match[1].replace(/\s/g, '');
+                        base64Imgs[i] = cleanBase64;
+                        document.getElementById(`fanArea${i + 1}`).innerHTML =
+                            `<div class="fan-label">${fans[i].label}</div>
+           <img src="data:image/jpeg;base64,${cleanBase64}" alt="Fan Curve">
+           <br>
+           <button class="dl-btn" onclick="downloadImg(${i})">Télécharger JPG</button>
+           `;
+                    } else {
+                        document.getElementById(`fanArea${i + 1}`).innerHTML =
+                            `<div class="fan-label">${fans[i].label}</div>
+           Pas de courbe JPG trouvée ou erreur SOAP.`;
+                        base64Imgs[i] = null;
+                    }
+                } catch (err) {
+                    document.getElementById(`fanArea${i + 1}`).innerHTML =
+                        `<div class="fan-label">${fans[i].label}</div>
+         Erreur backend : ${err.message}`;
+                    base64Imgs[i] = null;
+                }
+            }
+            document.getElementById('result').textContent = "Courbes calculées.";
+        }
+
+        function downloadImg(idx) {
+            if (!base64Imgs[idx]) return;
+            const link = document.createElement('a');
+            link.href = 'data:image/jpeg;base64,' + base64Imgs[idx];
+            link.download = `FanCurve_${idx + 1}.jpg`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</body>
+
+</html>
+
+
+<!-- <!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Fan Curves via XML Upload</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        img {
+            max-width: 400px;
+            margin: 10px 0;
+        }
+
+        .fan-label {
+            font-weight: bold;
+            margin-top: 20px;
+        }
+
+        .dl-btn {
+            margin: 10px 5px 10px 0;
+            padding: 6px 12px;
+            font-size: 1em;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Importe un fichier XML et affiche les courbes</h2>
+    <input type="file" id="xmlFile" accept=".xml">
+    <button onclick="processXML()">Calculer les Courbes</button>
+    <pre id="result"></pre>
+    <div id="fanArea1"></div>
+    <div id="fanArea2"></div>
+
+    <script>
+        let xmlContent = "";
+        const base64Imgs = []; // Conserver les images pour le download
+
+        document.getElementById('xmlFile').addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function (evt) {
+                xmlContent = evt.target.result;
+                document.getElementById('result').textContent = "Fichier chargé.";
+            };
+            reader.readAsText(file);
+        });
+
+        async function processXML() {
+            if (!xmlContent) {
+                alert("Chargez d'abord le fichier XML !");
+                return;
+            }
+            document.getElementById('result').textContent = "Traitement en cours...";
+            base64Imgs.length = 0; // reset pour chaque traitement
+
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(xmlContent, "text/xml");
+            const elevation = doc.querySelector("Elevation")?.textContent || "0";
+
+            const airFrais = doc.querySelector("Ventilateurs > AirFrais");
+            const fanFrais = {
+                label: "AirFrais",
+                model: airFrais?.querySelector("Model")?.textContent || "",
+                cfm: airFrais?.querySelector("CFM")?.textContent || "",
+                sp: airFrais?.querySelector("SP")?.textContent || "",
+                temp: airFrais?.querySelector("Temp")?.textContent || "",
+                altitude: elevation
+            };
+
+            const airVicie = doc.querySelector("Ventilateurs > AirVicie");
+            const fanVicie = {
+                label: "AirVicie",
+                model: airVicie?.querySelector("Model")?.textContent || "",
+                cfm: airVicie?.querySelector("CFM")?.textContent || "",
+                sp: airVicie?.querySelector("SP")?.textContent || "",
+                temp: airVicie?.querySelector("Temp")?.textContent || "",
+                altitude: elevation
+            };
+
+            const fans = [fanFrais, fanVicie];
+
+            document.getElementById('result').textContent =
+                "Fan #1 (AirFrais): " + JSON.stringify(fans[0], null, 2) + "\n\n" +
+                "Fan #2 (AirVicie): " + JSON.stringify(fans[1], null, 2);
+
+            // Reset le visuel
+            document.getElementById('fanArea1').innerHTML = '';
+            document.getElementById('fanArea2').innerHTML = '';
+
+            for (let i = 0; i < fans.length; i++) {
+                let soapBody = `
+      <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+        xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+        <soap:Body>
+          <CalcFanWithJPGCurves xmlns="http://tempuri.org/">
+            <strModel>${fans[i].model}</strModel>
+            <sSP>${fans[i].sp}</sSP>
+            <sCFM>${fans[i].cfm}</sCFM>
+            <sTemperature>${fans[i].temp}</sTemperature>
+            <sAltitude>${fans[i].altitude}</sAltitude>
+          </CalcFanWithJPGCurves>
+        </soap:Body>
+      </soap:Envelope>`;
+
+                try {
+                    const response = await fetch("http://localhost:3005/soapproxy", {
+                        method: "POST",
+                        headers: { "Content-Type": "text/xml; charset=utf-8" },
+                        body: soapBody
+                    });
+                    const xmlSoap = await response.text();
+                    // Extraction base64 image
+                    const match = xmlSoap.match(/<FanCurveLargeJPG>([\s\S]*?)<\/FanCurveLargeJPG>/);
+                    if (match && match[1].length > 10) {
+                        const cleanBase64 = match[1].replace(/\s/g, '');
+                        base64Imgs[i] = cleanBase64;
+                        document.getElementById(`fanArea${i + 1}`).innerHTML =
+                            `<div class="fan-label">${fans[i].label}</div>
+           <img src="data:image/jpeg;base64,${cleanBase64}" alt="Fan Curve">
+           <br>
+           <button class="dl-btn" onclick="downloadImg(${i})">Télécharger JPG</button>
+           `;
+                    } else {
+                        document.getElementById(`fanArea${i + 1}`).innerHTML =
+                            `<div class="fan-label">${fans[i].label}</div>
+           Pas de courbe JPG trouvée ou erreur SOAP.`;
+                        base64Imgs[i] = null;
+                    }
+                } catch (err) {
+                    document.getElementById(`fanArea${i + 1}`).innerHTML =
+                        `<div class="fan-label">${fans[i].label}</div>
+         Erreur backend : ${err.message}`;
+                    base64Imgs[i] = null;
+                }
+            }
+        }
+
+        // Fonction de download pour chaque fan (lié au bouton)
+        function downloadImg(idx) {
+            if (!base64Imgs[idx]) return;
+            const link = document.createElement('a');
+            link.href = 'data:image/jpeg;base64,' + base64Imgs[idx];
+            link.download = `FanCurve_${idx + 1}.jpg`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</body>
+
+</html> -->
+
+
+<!-- <!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <title>CalcFanWithCurves SOAP Demo</title>
+</head>
+
+<body>
+    <h2>Fan Data + Courbe JPG</h2>
+    <form id="fanForm">
+        <label>Modèle: <input type="text" id="strModel" value="G12-9"></label><br>
+        <label>SP: <input type="number" step="any" id="sSP" value="2.5"></label><br>
+        <label>CFM: <input type="number" step="any" id="sCFM" value="3000"></label><br>
+        <label>Température: <input type="number" step="any" id="sTemperature" value="72"></label><br>
+        <label>Altitude: <input type="number" step="any" id="sAltitude" value="200"></label><br>
+        <button type="submit">Calculer & Afficher</button>
+    </form>
+    <pre id="result"></pre>
+    <div id="imageArea"></div>
+
+    <script>
+        document.getElementById('fanForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            // Construction du SOAP XML
+            const strModel = document.getElementById('strModel').value;
+            const sSP = document.getElementById('sSP').value;
+            const sCFM = document.getElementById('sCFM').value;
+            const sTemperature = document.getElementById('sTemperature').value;
+            const sAltitude = document.getElementById('sAltitude').value;
+
+            const soapBody = `
+        <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+                       xmlns:xsd="http://www.w3.org/2001/XMLSchema" 
+                       xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+          <soap:Body>
+            <CalcFanWithJPGCurves xmlns="http://tempuri.org/">
+              <strModel>${strModel}</strModel>
+              <sSP>${sSP}</sSP>
+              <sCFM>${sCFM}</sCFM>
+              <sTemperature>${sTemperature}</sTemperature>
+              <sAltitude>${sAltitude}</sAltitude>
+            </CalcFanWithJPGCurves>
+          </soap:Body>
+        </soap:Envelope>`;
+
+            // Envoi de la requête
+            const response = await fetch('http://localhost:3005/soapproxy', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/xml; charset=utf-8',
+                    'SOAPAction': 'http://tempuri.org/CalcFanWithJPGCurves'
+                },
+                body: soapBody
+            });
+
+            const text = await response.text();
+
+            // Extraction des résultats (XML -> text)
+            function extract(tag, xml) {
+                const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+                return match ? match[1] : '';
+            }
+            // Extraction des infos principales
+            const model = extract('Model', text);
+            const hp = extract('HP', text);
+            const rpm = extract('RPM', text);
+            const error = extract('ErrorDescription', text);
+            // Extraction et affichage de l'image
+            const jpgBase64 = extract('FanCurveLargeJPG', text);
+
+            document.getElementById('result').textContent =
+                `Modèle: ${model}\nHP: ${hp}\nRPM: ${rpm}\nErreur: ${error}`;
+
+            if (jpgBase64.length > 10) {
+                document.getElementById('imageArea').innerHTML =
+                    `<img src="data:image/jpeg;base64,${jpgBase64}" alt="Fan Curve" style="max-width:400px;">`;
+            } else {
+                document.getElementById('imageArea').textContent = "Aucune image reçue.";
+            }
+        });
+    </script>
+</body>
+
+</html> -->
