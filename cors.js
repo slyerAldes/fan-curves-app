@@ -48,7 +48,11 @@ app.post("/soapproxy", async (req, res) => {
     res.status(500).send("Erreur : " + err.message);
   }
 });
-
-app.listen(3005, () => {
-  console.log("Proxy SOAP actif sur http://localhost:3005/soapproxy");
+const PORT = process.env.PORT || 3005;
+app.listen(PORT, () => {
+  console.log(`Serveur Express sur port ${PORT}`);
 });
+
+// app.listen(3005, () => {
+//   console.log("Proxy SOAP actif sur http://localhost:3005/soapproxy");
+// });
