@@ -41,6 +41,8 @@
     <div id="fanArea2"></div>
 
     <script>
+        const renderBaseURL = "https://fan-curves-app.onrender.com";
+
         let fans = [];
         let base64Imgs = [];
 
@@ -127,7 +129,7 @@
       </soap:Envelope>`;
 
                 try {
-                    const response = await fetch("http://localhost:3005/soapproxy", {
+                    const response = await fetch("/soapproxy", {
                         method: "POST",
                         headers: { "Content-Type": "text/xml; charset=utf-8" },
                         body: soapBody
